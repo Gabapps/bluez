@@ -664,15 +664,31 @@ static void property_changed(GDBusProxy *proxy, const char *name,
 
 		print_iter(str, name, iter);
 		g_free(str);
-	} else if (proxy == default_attr) {
-		// EVT : Notify
-		char *str;
+	} else if (!strcmp(interface, "org.bluez.GattCharacteristic1")) {
+		if(!strcmp(name, "Value")) {
+			char *str;
 
-		str = g_strdup_printf("[" COLORED_CHG "] Attribute %s ",
-						g_dbus_proxy_get_path(proxy));
+			if(gatt_hdlrs.onCharacteristicNotified) {
+				DBusMessageIter subiter;
+				uint8_t value[128];
+				int len = 0;
 
-		print_iter(str, name, iter);
-		g_free(str);
+				dbus_message_iter_recurse(iter, &subiter);
+				while (dbus_message_iter_get_arg_type(&subiter) != DBUS_TYPE_INVALID) {
+					dbus_message_iter_get_basic(&subiter, value+len);
+					len++;
+					dbus_message_iter_next(&subiter);
+				}
+
+				gatt_hdlrs.onCharacteristicNotified(proxy, value, len);
+			}
+
+			str = g_strdup_printf("[" COLORED_CHG "] Attribute %s ",
+							g_dbus_proxy_get_path(proxy));
+
+			print_iter(str, name, iter);
+			g_free(str);
+		}
 	}
 }
 
