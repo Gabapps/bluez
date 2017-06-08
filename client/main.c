@@ -43,6 +43,7 @@
 #include "monitor/uuid.h"
 #include "agent.h"
 #include "display.h"
+#include "gap.h"
 #include "gatt.h"
 #include "advertising.h"
 
@@ -72,6 +73,9 @@ static GDBusProxy *ad_manager;
 static GList *ctrl_list;
 
 static guint input = 0;
+
+static struct gap_handlers gap_hdlrs = {0};
+static struct gatt_handlers gatt_hdlrs = {0};
 
 static const char * const agent_arguments[] = {
 	"on",
@@ -467,8 +471,11 @@ static void proxy_added(GDBusProxy *proxy, void *user_data)
 
 	if (!strcmp(interface, "org.bluez.Device1")) {
 		device_added(proxy);
+		if(gap_hdlrs.onPeriphDiscovered)
+			gap_hdlrs.onPeriphDiscovered(proxy);
 	} else if (!strcmp(interface, "org.bluez.Adapter1")) {
 		adapter_added(proxy);
+		// EVT : Bluez New Adapter
 	} else if (!strcmp(interface, "org.bluez.AgentManager1")) {
 		if (!agent_manager) {
 			agent_manager = proxy;
@@ -478,12 +485,19 @@ static void proxy_added(GDBusProxy *proxy, void *user_data)
 							auto_register_agent);
 		}
 	} else if (!strcmp(interface, "org.bluez.GattService1")) {
-		if (service_is_child(proxy))
+		if (service_is_child(proxy)) {
 			gatt_add_service(proxy);
+			if(gatt_hdlrs.onServiceDiscovered)
+				gatt_hdlrs.onServiceDiscovered(proxy);
+		}
 	} else if (!strcmp(interface, "org.bluez.GattCharacteristic1")) {
 		gatt_add_characteristic(proxy);
+		if(gatt_hdlrs.onCharacteristicDiscovered)
+			gatt_hdlrs.onCharacteristicDiscovered(proxy);
 	} else if (!strcmp(interface, "org.bluez.GattDescriptor1")) {
 		gatt_add_descriptor(proxy);
+		if(gatt_hdlrs.onDescriptorDiscovered)
+			gatt_hdlrs.onDescriptorDiscovered(proxy);
 	} else if (!strcmp(interface, "org.bluez.GattManager1")) {
 		gatt_add_manager(proxy);
 	} else if (!strcmp(interface, "org.bluez.LEAdvertisingManager1")) {
@@ -613,9 +627,22 @@ static void property_changed(GDBusProxy *proxy, const char *name,
 				dbus_message_iter_get_basic(iter, &connected);
 
 				if (connected && default_dev == NULL)
-					set_default_device(proxy, NULL);
-				else if (!connected && default_dev == proxy)
-					set_default_device(NULL, NULL);
+					gap_hdlrs.onPeriphConnected(proxy);
+				else if (!connected) {
+					gap_hdlrs.onPeriphDisconnected(proxy);
+					if(default_dev == proxy)
+						set_default_device(NULL, NULL);
+				}
+			}
+
+			if (!strcmp(name, "ServicesResolved")) {
+				dbus_bool_t resolved;
+
+				dbus_message_iter_get_basic(iter, &resolved);
+
+				if(resolved)
+					if(gatt_hdlrs.onServicesResolved)
+						gatt_hdlrs.onServicesResolved(proxy);
 			}
 
 			print_iter(str, name, iter);
@@ -638,6 +665,7 @@ static void property_changed(GDBusProxy *proxy, const char *name,
 		print_iter(str, name, iter);
 		g_free(str);
 	} else if (proxy == default_attr) {
+		// EVT : Notify
 		char *str;
 
 		str = g_strdup_printf("[" COLORED_CHG "] Attribute %s ",
@@ -1567,6 +1595,35 @@ static void cmd_remove(const char *arg)
 	remove_device(proxy);
 }
 
+static void cmd_select_device(const char *arg) {
+	GDBusProxy *proxy;
+	DBusMessageIter iter;
+	gboolean connected;
+
+	if (!arg || !strlen(arg)) {
+		rl_printf("Missing device address argument\n");
+		return;
+	}
+
+	if (check_default_ctrl() == FALSE)
+		return;
+
+	proxy = find_proxy_by_address(default_ctrl->devices, arg);
+	if (!proxy) {
+		rl_printf("Device %s not available\n", arg);
+		return;
+	}
+	if(g_dbus_proxy_get_property(proxy, "Connected", &iter) == TRUE) {
+		dbus_message_iter_get_basic(&iter, &connected);
+		if(!connected) {
+			rl_printf("Device %s is not connected\n", arg);
+			return;
+		}
+		set_default_device(proxy, NULL);
+	}
+}
+
+
 static void connect_reply(DBusMessage *message, void *user_data)
 {
 	GDBusProxy *proxy = user_data;
@@ -1581,8 +1638,6 @@ static void connect_reply(DBusMessage *message, void *user_data)
 	}
 
 	rl_printf("Connection successful\n");
-
-	set_default_device(proxy, NULL);
 }
 
 static void cmd_connect(const char *arg)
@@ -2122,6 +2177,8 @@ static const struct {
 	{ "unblock",      "[dev]",    cmd_unblock, "Unblock device",
 								dev_generator },
 	{ "remove",       "<dev>",    cmd_remove, "Remove device",
+							dev_generator },
+	{ "select-device",   "[dev]",    cmd_select_device, "Select a device",
 							dev_generator },
 	{ "connect",      "<dev>",    cmd_connect, "Connect device",
 							dev_generator },

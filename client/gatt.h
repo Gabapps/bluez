@@ -21,6 +21,14 @@
  *
  */
 
+struct gatt_handlers {
+    void (*onServiceDiscovered) (GDBusProxy *service);
+    void (*onCharacteristicDiscovered) (GDBusProxy *characteristic);
+    void (*onDescriptorDiscovered) (GDBusProxy *descriptor);
+    void (*onServicesResolved) (GDBusProxy *device);
+    void (*onCharacteristicNotified) (GDBusProxy *characteristic, GByteArray value, gint len);
+};
+
 void gatt_add_service(GDBusProxy *proxy);
 void gatt_remove_service(GDBusProxy *proxy);
 
